@@ -93,7 +93,7 @@ TEST_CONFIGS: List[TestConfig] = [
     TestConfig(127, 131, 23, "素数维度 (127x131)", "prime"),
     TestConfig(509, 521, 67, "素数维度 (509x521)", "prime"),
     # 大规模测试
-    TestConfig(4096, 4096, 128, "大规模 (4096x4096)", "large"),
+    TestConfig(4093, 4099, 128, "大规模 irregular (4093x4099)", "large"),
 ]
 
 CATEGORY_DESCRIPTIONS = {
@@ -170,59 +170,55 @@ def run_single_test(m: int, n: int, nnz_per_row: int, k: int = 128) -> TestResul
 
     config = TestConfig(m, n, nnz_per_row, f"m={m}, n={n}, nnz/row={nnz_per_row}")
 
-    try:
-        # 创建 RoDe CSR 矩阵
-        rode_csr = RoDeCSR.from_random(m, n, nnz_per_row, k=k, seed=42)
+    # 创建 RoDe CSR 矩阵
+    rode_csr = RoDeCSR.from_random(m, n, nnz_per_row, k=k, seed=42)
 
-        # 创建稠密矩阵
-        torch.manual_seed(123)
-        lhs = torch.randn(m, k, device="cuda", dtype=torch.float32)
-        torch.manual_seed(456)
-        rhs = torch.randn(n, k, device="cuda", dtype=torch.float32)
+    # 创建稠密矩阵
+    torch.manual_seed(123)
+    lhs = torch.randn(m, k, device="cuda", dtype=torch.float32)
+    torch.manual_seed(456)
+    rhs = torch.randn(n, k, device="cuda", dtype=torch.float32)
 
-        # 预热
-        _ = rode_sddmm(rode_csr, lhs, rhs)
-        torch.cuda.synchronize()
+    # 预热
+    _ = rode_sddmm(rode_csr, lhs, rhs)
+    torch.cuda.synchronize()
 
-        # RoDe SDDMM 计时
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        for _ in range(10):
-            rode_output = rode_sddmm(rode_csr, lhs, rhs)
-        torch.cuda.synchronize()
-        rode_time = (time.perf_counter() - start) / 10 * 1000  # ms
+    # RoDe SDDMM 计时
+    torch.cuda.synchronize()
+    start = time.perf_counter()
+    for _ in range(10):
+        rode_output = rode_sddmm(rode_csr, lhs, rhs)
+    torch.cuda.synchronize()
+    rode_time = (time.perf_counter() - start) / 10 * 1000  # ms
 
-        # PyTorch sparse 参考实现
-        torch_sparse_csr = rode_csr.to_torch_sparse_csr()
+    # PyTorch sparse 参考实现
+    torch_sparse_csr = rode_csr.to_torch_sparse_csr()
 
-        # 预热
-        _ = torch_sddmm_reference(torch_sparse_csr, lhs, rhs)
-        torch.cuda.synchronize()
+    # 预热
+    _ = torch_sddmm_reference(torch_sparse_csr, lhs, rhs)
+    torch.cuda.synchronize()
 
-        # Torch sparse 计时
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        for _ in range(10):
-            torch_output = torch_sddmm_reference(torch_sparse_csr, lhs, rhs)
-        torch.cuda.synchronize()
-        torch_time = (time.perf_counter() - start) / 10 * 1000  # ms
+    # Torch sparse 计时
+    torch.cuda.synchronize()
+    start = time.perf_counter()
+    for _ in range(10):
+        torch_output = torch_sddmm_reference(torch_sparse_csr, lhs, rhs)
+    torch.cuda.synchronize()
+    torch_time = (time.perf_counter() - start) / 10 * 1000  # ms
 
-        # 比较结果
-        comparison = compare_results(rode_output, torch_output, rode_csr)
+    # 比较结果
+    comparison = compare_results(rode_output, torch_output, rode_csr)
 
-        return TestResult(
-            config=config,
-            passed=comparison["passed"],
-            mae=comparison["mae"],
-            mean_rel=comparison["mean_rel"],
-            max_abs=comparison["max_abs"],
-            max_rel=comparison["max_rel"],
-            rode_time_ms=rode_time,
-            torch_time_ms=torch_time,
-        )
-
-    except Exception as e:
-        return TestResult(config=config, passed=False, error_msg=str(e))
+    return TestResult(
+        config=config,
+        passed=comparison["passed"],
+        mae=comparison["mae"],
+        mean_rel=comparison["mean_rel"],
+        max_abs=comparison["max_abs"],
+        max_rel=comparison["max_rel"],
+        rode_time_ms=rode_time,
+        torch_time_ms=torch_time,
+    )
 
 
 # ============================================================================

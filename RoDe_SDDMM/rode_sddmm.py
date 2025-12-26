@@ -425,21 +425,28 @@ def rode_sddmm(sparse_matrix: RoDeCSR, lhs_matrix: torch.Tensor, rhs_matrix: tor
 
 
 def torch_sddmm_reference(
-    sparse_csr: torch.Tensor, lhs_matrix: torch.Tensor, rhs_matrix: torch.Tensor
+    sparse_csr: torch.Tensor,
+    lhs_matrix: torch.Tensor,
+    rhs_matrix: torch.Tensor,
 ) -> torch.Tensor:
     """
-    PyTorch 参考实现的 SDDMM
+    PyTorch 参考实现的 SDDMM: out = S ⊙ (A × B^T)
 
     使用 torch.sparse.sampled_addmm API 实现 SDDMM:
-        out = alpha * (mat1 @ mat2) * spy(input) + beta * input
+        sampled_addmm(input, mat1, mat2, beta, alpha) = alpha * (mat1 @ mat2) * spy(input) + beta * input
 
-    当 alpha=1, beta=0 时，等价于:
-        out = (A × B^T) 在 S 非零位置的采样
+    当 beta=1.0, alpha=1.0 时:
+        out = (mat1 @ mat2) * spy(input) + input
+            = (A × B^T) 采样值 + S 原始值
+
+    但我们需要的是 S ⊙ (A × B^T)，即 S 的值 × 采样值。
+
+    最高效实现：直接传入 sparse_csr，设置 beta=0.0
+        - sampled_addmm 只使用 sparse_csr 的稀疏模式进行采样
+        - 返回 (A × B^T) 在 S 非零位置的采样值
+        - 然后乘以 S 的原始值得到最终 SDDMM 结果
 
     参考: https://pytorch.org/docs/stable/generated/torch.sparse.sampled_addmm.html
-
-    注意: sampled_addmm 计算 mat1 @ mat2（不是 mat1 @ mat2^T）
-          因此需要传入 rhs_matrix.T 作为 mat2
 
     Args:
         sparse_csr: PyTorch sparse_csr tensor，形状 (m, n)
@@ -449,52 +456,27 @@ def torch_sddmm_reference(
     Returns:
         SDDMM 结果的稀疏 CSR tensor
     """
-    # 使用 torch.sparse.sampled_addmm
-    # sampled_addmm(input, mat1, mat2, *, beta=1., alpha=1., out=None)
-    # 计算: beta * input + alpha * (mat1 @ mat2) * spy(input)
-    #
-    # 对于 SDDMM，我们需要计算: S ⊙ (A × B^T)
-    #   - input: 稀疏矩阵 S (用于提供稀疏模式)
-    #   - mat1: 左侧稠密矩阵 A (m, k)
-    #   - mat2: B^T，即 rhs_matrix.T (k, n)
-    #   - alpha=1, beta=0: 只计算采样的矩阵乘法部分
-    #
-    # 因为 sampled_addmm 计算 mat1 @ mat2 (不是 mat1 @ mat2^T)
-    # 所以我们需要先创建一个全1的稀疏矩阵来获取采样值，然后乘以原始稀疏值
-
-    # 创建与 sparse_csr 结构相同但值全为1的稀疏矩阵
-    ones_sparse = torch.sparse_csr_tensor(
-        sparse_csr.crow_indices(),
-        sparse_csr.col_indices(),
-        torch.ones_like(sparse_csr.values()),
-        size=sparse_csr.shape,
-        device=sparse_csr.device,
-        dtype=sparse_csr.dtype,
-    )
-
-    # 使用 sampled_addmm 计算采样的矩阵乘法
-    # sampled_addmm 计算: beta * input + alpha * (mat1 @ mat2) * spy(input)
-    # 其中 mat1 形状为 (m, k)，mat2 形状为 (k, n)
-    # 我们需要计算 A @ B^T，其中 A (m, k)，B (n, k)
-    # 因此 mat2 = B^T = rhs_matrix.T，形状为 (k, n)
-    sampled_result = torch.sparse.sampled_addmm(
-        ones_sparse,
+    # 最高效实现：直接使用 sparse_csr，避免创建额外的 ones_sparse
+    # beta=0.0 时，sparse_csr 的值不参与加法，只使用其稀疏模式
+    sampled = torch.sparse.sampled_addmm(
+        sparse_csr,
         lhs_matrix,  # (m, k)
-        rhs_matrix.T,  # (k, n)，转置后
+        rhs_matrix.T,  # (k, n)
         beta=0.0,
         alpha=1.0,
     )
 
-    # 将采样结果乘以原始稀疏矩阵的值（Hadamard 积）
-    result_values = sparse_csr.values() * sampled_result.values()
+    # SDDMM = S ⊙ (A × B^T)，需要乘以 S 的原始值
+    # 构造最终结果：采样值 × S 的值
+    result_values = sampled.values() * sparse_csr.values()
 
-    # 重建 CSR 稀疏矩阵
     return torch.sparse_csr_tensor(
-        sparse_csr.crow_indices(),
-        sparse_csr.col_indices(),
+        sampled.crow_indices(),
+        sampled.col_indices(),
         result_values,
-        size=sparse_csr.shape,
-        device=sparse_csr.device,
+        size=sampled.shape,
+        device=sampled.device,
+        dtype=sampled.dtype,
     )
 
 
@@ -540,10 +522,16 @@ def compare_results(
         return {
             "passed": False,
             "error": f"Size mismatch: RoDe={rode_values.numel()}, Torch={torch_values.numel()}",
+            "mae": float("inf"),
+            "mean_rel": float("inf"),
+            "max_abs": float("inf"),
+            "max_rel": float("inf"),
+            "error_count": -1,
+            "total_count": rode_values.numel(),
         }
 
     diff = torch.abs(rode_values - torch_values)
-    rel_diff = diff / (torch.abs(torch_values) + 1e-6)
+    rel_diff = diff / (torch.abs(torch_values) + 1e-8)
 
     mae = diff.mean().item()
     mean_rel = rel_diff.mean().item()

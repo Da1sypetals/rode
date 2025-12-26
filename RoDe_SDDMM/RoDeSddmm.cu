@@ -3,7 +3,7 @@
 #include "cuda_runtime.h"
 #include <iostream>
 #include "common_utils.h"
-#include "matrix_utils.h"
+// #include "matrix_utils.h"  // 暂时移除，RoDeSddmm.cu 不需要此头文件
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/memcpy_async.h>

@@ -194,35 +194,56 @@ torch::Tensor rode_sddmm_forward(
     const float* d_rhs_matrix = rhs_matrix.data_ptr<float>();
     float* d_out = out.data_ptr<float>();
     
-    // 创建 CUDA 流
-    cudaStream_t stream1, stream2;
-    cudaStreamCreate(&stream1);
-    cudaStreamCreate(&stream2);
+    // 如果 m1 和 m2 都为 0，则直接返回全零结果
+    if (m1 == 0 && m2 == 0) {
+        return out;
+    }
     
-    // 调用 kernel
+    // 创建 CUDA 流
+    cudaStream_t stream1 = nullptr;
+    cudaStream_t stream2 = nullptr;
+    
+    if (m1 > 0) {
+        cudaStreamCreate(&stream1);
+    }
+    if (m2 > 0) {
+        cudaStreamCreate(&stream2);
+    }
+    
+    // 调用 kernel（仅当 m1 > 0 或 m2 > 0 时）
     if (k_version == 32) {
-        RoDeSDDMM_n32(
-            m1, m2, n, k,
-            d_block_indices, d_residue_indices, d_st_offsets,
-            d_row_offsets, d_column_indices, d_values,
-            d_lhs_matrix, d_rhs_matrix, d_out,
-            stream1, stream2
-        );
+        // 需要修改 RoDeSDDMM_n32 以支持条件调用
+        // 这里暂时使用原始调用，但需要确保 m1 和 m2 至少有一个 > 0
+        if (m1 > 0 || m2 > 0) {
+            RoDeSDDMM_n32(
+                m1, m2, n, k,
+                d_block_indices, d_residue_indices, d_st_offsets,
+                d_row_offsets, d_column_indices, d_values,
+                d_lhs_matrix, d_rhs_matrix, d_out,
+                stream1 ? stream1 : 0, stream2 ? stream2 : 0
+            );
+        }
     } else {
-        RoDeSDDMM_n128(
-            m1, m2, n, k,
-            d_block_indices, d_residue_indices, d_st_offsets,
-            d_row_offsets, d_column_indices, d_values,
-            d_lhs_matrix, d_rhs_matrix, d_out,
-            stream1, stream2
-        );
+        if (m1 > 0 || m2 > 0) {
+            RoDeSDDMM_n128(
+                m1, m2, n, k,
+                d_block_indices, d_residue_indices, d_st_offsets,
+                d_row_offsets, d_column_indices, d_values,
+                d_lhs_matrix, d_rhs_matrix, d_out,
+                stream1 ? stream1 : 0, stream2 ? stream2 : 0
+            );
+        }
     }
     
     // 同步流
-    cudaStreamSynchronize(stream1);
-    cudaStreamSynchronize(stream2);
-    cudaStreamDestroy(stream1);
-    cudaStreamDestroy(stream2);
+    if (stream1) {
+        cudaStreamSynchronize(stream1);
+        cudaStreamDestroy(stream1);
+    }
+    if (stream2) {
+        cudaStreamSynchronize(stream2);
+        cudaStreamDestroy(stream2);
+    }
     
     return out;
 }

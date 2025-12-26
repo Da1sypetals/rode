@@ -3,7 +3,6 @@
 #include "cuda_runtime.h"
 #include <iostream>
 #include "common_utils.h"
-// #include "matrix_utils.h"  // 暂时移除，RoDeSddmm.cu 不需要此头文件
 
 #include <cooperative_groups.h>
 #include <cooperative_groups/memcpy_async.h>
@@ -498,14 +497,19 @@ template <typename LoadType ,int kBlockItemsY, int kBlockItemsK, int kBlockItems
 void RoDeSDDMMKernel_n32(int m1,int m2,int n,int k,const int* __restrict__ row_indices_block,const int* __restrict__ row_indices_residue,const int* __restrict__ st_offsets,const int* __restrict__ row_offsets,const int* __restrict__ column_indices,\
     const float* __restrict__ values,const float* __restrict__ lhs_matrix,const float* __restrict__ rhs_matrix,float* __restrict__ out,cudaStream_t stream1,cudaStream_t stream2) {
     
-    dim3 grid_dim1((m1 + kBlockItemsY - 1)/kBlockItemsY, SEG_LENGTH/kBlockItemsX, 1);
-    dim3 grid_dim2((m2 + kBlockItemsY - 1)/kBlockItemsY, 1, 1);
-
     dim3 block_dim(kBlockWidth,kBlockItemsY,1);
 
-    SDDMMKernel4Block<LoadType,kBlockItemsY,kBlockItemsK,kBlockItemsX,kBlockWidth,K><<<grid_dim1,block_dim,0,stream1>>>(m1,n,k,row_indices_block,row_offsets,column_indices,st_offsets,values,lhs_matrix,rhs_matrix,out);
-    SDDMMKernel4Residue<LoadType,kBlockItemsY,kBlockItemsK,kBlockItemsX,kBlockWidth,K><<<grid_dim2,block_dim,0,stream2>>>(m2,n,k,row_indices_residue,row_offsets,column_indices,values,lhs_matrix,rhs_matrix,out);
-
+    // 仅当 m1 > 0 时启动 Block kernel
+    if (m1 > 0 && stream1) {
+        dim3 grid_dim1((m1 + kBlockItemsY - 1)/kBlockItemsY, SEG_LENGTH/kBlockItemsX, 1);
+        SDDMMKernel4Block<LoadType,kBlockItemsY,kBlockItemsK,kBlockItemsX,kBlockWidth,K><<<grid_dim1,block_dim,0,stream1>>>(m1,n,k,row_indices_block,row_offsets,column_indices,st_offsets,values,lhs_matrix,rhs_matrix,out);
+    }
+    
+    // 仅当 m2 > 0 时启动 Residue kernel
+    if (m2 > 0 && stream2) {
+        dim3 grid_dim2((m2 + kBlockItemsY - 1)/kBlockItemsY, 1, 1);
+        SDDMMKernel4Residue<LoadType,kBlockItemsY,kBlockItemsK,kBlockItemsX,kBlockWidth,K><<<grid_dim2,block_dim,0,stream2>>>(m2,n,k,row_indices_residue,row_offsets,column_indices,values,lhs_matrix,rhs_matrix,out);
+    }
 }
 
 void RoDeSDDMM_n32(int m1,int m2,int n,int k,const int* __restrict__ row_indices_block,const int* __restrict__ row_indices_residue,const int* __restrict__ st_offsets,const int* __restrict__ row_offsets,const int* __restrict__ column_indices,\
@@ -518,15 +522,20 @@ template <typename LoadType ,int kBlockItemsY, int kBlockItemsK, int kBlockItems
 void RoDeSDDMMKernel_n128(int m1,int m2,int n,int k,const int* __restrict__ row_indices_block,const int* __restrict__ row_indices_residue,const int* __restrict__ st_offsets,const int* __restrict__ row_offsets,const int* __restrict__ column_indices,\
     const float* __restrict__ values,const float* __restrict__ lhs_matrix,const float* __restrict__ rhs_matrix,float* __restrict__ out,cudaStream_t stream1,cudaStream_t stream2) {
     
-    dim3 grid_dim1((m1 + kBlockItemsY - 1)/kBlockItemsY, SEG_LENGTH/kBlockItemsX, 1);
-    dim3 grid_dim2((m2 + kBlockItemsY - 1)/kBlockItemsY, 1, 1);
-
     dim3 block_dim1(kBlockWidth,kBlockItemsY,1);
     dim3 block_dim2(kBlockItemsX,kBlockItemsY,1);
 
-    SDDMMKernel4Block<LoadType,kBlockItemsY,kBlockItemsK,kBlockItemsX,kBlockWidth,K><<<grid_dim1,block_dim1,0,stream1>>>(m1,n,k,row_indices_block,row_offsets,column_indices,st_offsets,values,lhs_matrix,rhs_matrix,out);
-    SDDMMKernel4Residue<LoadType,kBlockItemsY,K,kBlockItemsX,kBlockItemsX,K><<<grid_dim2,block_dim2,0,stream2>>>(m2,n,k,row_indices_residue,row_offsets,column_indices,values,lhs_matrix,rhs_matrix,out);
-
+    // 仅当 m1 > 0 时启动 Block kernel
+    if (m1 > 0 && stream1) {
+        dim3 grid_dim1((m1 + kBlockItemsY - 1)/kBlockItemsY, SEG_LENGTH/kBlockItemsX, 1);
+        SDDMMKernel4Block<LoadType,kBlockItemsY,kBlockItemsK,kBlockItemsX,kBlockWidth,K><<<grid_dim1,block_dim1,0,stream1>>>(m1,n,k,row_indices_block,row_offsets,column_indices,st_offsets,values,lhs_matrix,rhs_matrix,out);
+    }
+    
+    // 仅当 m2 > 0 时启动 Residue kernel
+    if (m2 > 0 && stream2) {
+        dim3 grid_dim2((m2 + kBlockItemsY - 1)/kBlockItemsY, 1, 1);
+        SDDMMKernel4Residue<LoadType,kBlockItemsY,K,kBlockItemsX,kBlockItemsX,K><<<grid_dim2,block_dim2,0,stream2>>>(m2,n,k,row_indices_residue,row_offsets,column_indices,values,lhs_matrix,rhs_matrix,out);
+    }
 }
 
 void RoDeSDDMM_n128(int m1,int m2,int n,int k,const int* __restrict__ row_indices_block,const int* __restrict__ row_indices_residue,const int* __restrict__ st_offsets,const int* __restrict__ row_offsets,const int* __restrict__ column_indices,\

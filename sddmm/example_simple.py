@@ -5,7 +5,7 @@ RoDe SDDMM 最简示例
 """
 
 import torch
-from rode_sddmm import RoDeCSR, rode_sddmm, torch_sddmm_reference
+from interface import RoDeCSR, rode_sddmm, torch_sddmm_reference
 
 # 设置参数
 m, n, k = 128, 256, 128

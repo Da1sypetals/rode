@@ -23,6 +23,7 @@ from typing import List, Tuple
 import torch
 
 from tabulate import tabulate
+from interface import RoDeCSR, compare_results, rode_sddmm, torch_sddmm_reference
 
 
 # ============================================================================
@@ -160,7 +161,6 @@ def compile_extension(verbose: bool = False) -> bool:
 # ============================================================================
 def run_single_test(m: int, n: int, nnz_per_row: int, k: int = 128) -> TestResult:
     """运行单个测试"""
-    from rode_sddmm import RoDeCSR, compare_results, rode_sddmm, torch_sddmm_reference
 
     config = TestConfig(m, n, nnz_per_row=nnz_per_row, desc=f"m={m}, n={n}, nnz/row={nnz_per_row}")
 
@@ -357,8 +357,6 @@ def run_category_tests(category: str, k: int = 128) -> Tuple[int, int]:
 def run_detailed_test(m: int, n: int, nnz_per_row: int, k: int = 128):
     """运行单项测试并显示详细结果"""
     print_header(f"详细测试: m={m}, n={n}, nnz_per_row={nnz_per_row}, k={k}")
-
-    from rode_sddmm import RoDeCSR, compare_results, rode_sddmm, torch_sddmm_reference
 
     # 创建矩阵
     print("创建 RoDe CSR 矩阵...")

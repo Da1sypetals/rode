@@ -10,6 +10,7 @@ import os
 
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from pathlib import Path
 
 
 def get_cuda_arch():
@@ -23,7 +24,7 @@ def get_cuda_arch():
 
 
 # 获取当前目录
-current_dir = os.path.dirname(os.path.abspath(__file__))
+current_dir = Path(__file__).resolve().parent / "csrc"
 
 # 源文件列表
 sources = [

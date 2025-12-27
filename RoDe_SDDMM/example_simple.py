@@ -10,7 +10,7 @@ from rode_sddmm import RoDeCSR, rode_sddmm, torch_sddmm_reference
 # 设置参数
 m, n, k = 128, 256, 128
 nnz_per_row = 32
-device = "cuda"
+device = torch.device("cuda:0")
 dtype = torch.float32
 
 print("=== RoDe SDDMM 示例 ===")
@@ -59,10 +59,10 @@ rode_csr = RoDeCSR(
     row_offsets=row_offsets,
     column_indices=col_indices,
     values=values,
+    device=device,
     m=m,
     n=n,
     k=k,
-    device=device,
 )
 
 # ============================================

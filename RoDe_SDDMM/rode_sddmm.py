@@ -4,10 +4,9 @@ RoDe SDDMM Python 接口
 提供 PyTorch 风格的 SDDMM 操作，支持与 torch.sparse 对比
 """
 
-import math
-from typing import Optional, Tuple
+import torch  # noqa
 
-import torch
+import rode_sddmm_cuda
 
 
 class RoDeCSR:
@@ -43,10 +42,10 @@ class RoDeCSR:
         row_offsets: torch.Tensor,
         column_indices: torch.Tensor,
         values: torch.Tensor,
+        device: torch.device,
         m: int,
         n: int,
         k: int = 128,
-        device: Optional[torch.device] = None,
     ):
         """
         初始化 RoDe CSR 矩阵
@@ -67,7 +66,7 @@ class RoDeCSR:
         self.n = n
         self.k = k
         self.nnz = values.numel()
-        self.device = device or torch.device("cuda")
+        self.device = torch.device(device)
 
         # 确保数据类型正确
         self.row_offsets_cpu = row_offsets.to(dtype=torch.int32, device="cpu").contiguous()
@@ -81,140 +80,22 @@ class RoDeCSR:
         self.row_offsets = self.row_offsets_cpu.to(device=self.device)
 
     def _preprocess(self):
-        """执行 RoDe 预处理，生成 block 和 residue 索引"""
-        try:
-            # 尝试使用 CUDA 扩展
-            import rode_sddmm_cuda
-
-            config = self.CONFIGS[self.k]
-            result = rode_sddmm_cuda.preprocess(
-                self.row_offsets_cpu, self.nnz, config["seg_length"], config["k_block"], config["vec_len"]
-            )
-
-            block_indices, st_offsets, residue_indices, m1, m2 = result
-
-            self.block_indices = block_indices.to(device=self.device)
-            self.st_offsets = st_offsets.to(device=self.device)
-            self.residue_indices = residue_indices.to(device=self.device)
-            self.m1 = m1
-            self.m2 = m2
-
-        except ImportError:
-            # 回退到纯 Python 实现
-            self._preprocess_python()
-
-    def _preprocess_python(self):
-        """纯 Python 预处理实现（备用）"""
         config = self.CONFIGS[self.k]
-        seg_length = config["seg_length"]
-        k_block = config["k_block"]
-        vec_len = config["vec_len"]
-
-        row_ptr = self.row_offsets_cpu.numpy()
-
-        block_r_ind = []
-        st_off = []
-        residue_r_ind = []
-
-        for i in range(self.m):
-            row_offset = int(row_ptr[i])
-            n_padding = row_offset % vec_len
-            row_nnz = int(row_ptr[i + 1]) - row_offset + n_padding
-
-            if row_nnz > seg_length:
-                block_r_ind.append(i)
-                st_off.append(row_offset)
-                row_offset = (row_offset + seg_length) - n_padding
-                row_nnz -= seg_length
-
-            while row_nnz > seg_length:
-                block_r_ind.append(i)
-                st_off.append(row_offset)
-                row_offset += seg_length
-                row_nnz -= seg_length
-
-            if row_nnz > 0:
-                if row_nnz >= k_block:
-                    block_r_ind.append(i)
-                    st_off.append(row_offset)
-                if row_nnz % k_block:
-                    residue_r_ind.append(i)
-
-        st_off.append(int(row_ptr[self.m]))
-
-        self.m1 = len(block_r_ind)
-        self.m2 = len(residue_r_ind)
-
-        # 创建 tensor
-        self.block_indices = torch.tensor(
-            block_r_ind if block_r_ind else [0], dtype=torch.int32, device=self.device
-        )
-        self.st_offsets = torch.tensor(st_off, dtype=torch.int32, device=self.device)
-        self.residue_indices = torch.tensor(
-            residue_r_ind if residue_r_ind else [0], dtype=torch.int32, device=self.device
+        result = rode_sddmm_cuda.preprocess(
+            self.row_offsets_cpu,
+            self.nnz,
+            config["seg_length"],
+            config["k_block"],
+            config["vec_len"],
         )
 
-    @classmethod
-    def from_dense(cls, dense_matrix: torch.Tensor, k: int = 128, pad_to: int = 4) -> "RoDeCSR":
-        """
-        从稠密矩阵创建 RoDe CSR 矩阵
+        block_indices, st_offsets, residue_indices, m1, m2 = result
 
-        Args:
-            dense_matrix: 稠密矩阵，形状 (m, n)
-            k: 隐藏维度
-            pad_to: 行填充对齐值
-
-        Returns:
-            RoDeCSR 实例
-        """
-        m, n = dense_matrix.shape
-        device = dense_matrix.device
-
-        # 转换为 CSR
-        sparse_csr = dense_matrix.to_sparse_csr()
-
-        row_offsets = sparse_csr.crow_indices().to(torch.int32)
-        column_indices = sparse_csr.col_indices().to(torch.int32)
-        values = sparse_csr.values().to(torch.float32)
-
-        # 如果需要填充
-        if pad_to > 1:
-            row_offsets, column_indices, values = cls._pad_csr(
-                row_offsets, column_indices, values, m, n, pad_to
-            )
-
-        return cls(row_offsets.cpu(), column_indices, values, m, n, k, device=device)
-
-    @classmethod
-    def from_scipy(
-        cls, scipy_csr, k: int = 128, device: Optional[torch.device] = None, pad_to: int = 4
-    ) -> "RoDeCSR":
-        """
-        从 scipy.sparse.csr_matrix 创建 RoDe CSR 矩阵
-
-        Args:
-            scipy_csr: scipy CSR 矩阵
-            k: 隐藏维度
-            device: 目标设备
-            pad_to: 行填充对齐值
-
-        Returns:
-            RoDeCSR 实例
-        """
-        m, n = scipy_csr.shape
-        device = device or torch.device("cuda")
-
-        row_offsets = torch.from_numpy(scipy_csr.indptr.astype("int32"))
-        column_indices = torch.from_numpy(scipy_csr.indices.astype("int32"))
-        values = torch.from_numpy(scipy_csr.data.astype("float32"))
-
-        # 如果需要填充
-        if pad_to > 1:
-            row_offsets, column_indices, values = cls._pad_csr(
-                row_offsets, column_indices, values, m, n, pad_to
-            )
-
-        return cls(row_offsets, column_indices.to(device), values.to(device), m, n, k, device=device)
+        self.block_indices = block_indices.to(device=self.device)
+        self.st_offsets = st_offsets.to(device=self.device)
+        self.residue_indices = residue_indices.to(device=self.device)
+        self.m1 = m1
+        self.m2 = m2
 
     @classmethod
     def from_random(
@@ -222,107 +103,44 @@ class RoDeCSR:
         m: int,
         n: int,
         nnz_per_row: int,
+        device: torch.device,
         k: int = 128,
-        device: Optional[torch.device] = None,
-        seed: int = 42,
-        pad_to: int = 4,
     ) -> "RoDeCSR":
-        """
-        生成随机 RoDe CSR 矩阵
+        nnz_raw = m * nnz_per_row
+        rows = torch.randint(0, m, (nnz_raw,))
+        cols = torch.randint(0, n, (nnz_raw,))
 
-        Args:
-            m: 行数
-            n: 列数
-            nnz_per_row: 每行平均非零元素数
-            k: 隐藏维度
-            device: 目标设备
-            seed: 随机种子
-            pad_to: 行填充对齐值
+        # 使用 torch.unique 对 (row, col) 进行去重
+        # 将 (row, col) 编码为单个值进行去重
+        coords = rows * n + cols
+        unique_coords, inverse_indices = torch.unique(coords, return_inverse=True)
 
-        Returns:
-            RoDeCSR 实例
-        """
-        import numpy as np
+        # 解码回 (row, col)
+        unique_rows = unique_coords // n
+        unique_cols = unique_coords % n
 
-        device = device or torch.device("cuda")
-        rng = np.random.RandomState(seed)
+        # 生成去重后的随机值
+        nnz = unique_coords.shape[0]
+        unique_values = torch.randn(nnz, dtype=torch.float32)
 
-        row_offsets = [0]
-        column_indices = []
-        values = []
+        # 使用 torch.sparse_coo_tensor 创建 COO，然后转换为 CSR
+        indices = torch.stack([unique_rows, unique_cols], dim=0)
+        coo_sparse = torch.sparse_coo_tensor(indices, unique_values, size=(m, n))
+        csr_sparse = coo_sparse.to_sparse_csr()
 
-        for i in range(m):
-            # 使用泊松分布生成每行 nnz
-            row_nnz = max(1, min(rng.poisson(nnz_per_row), n))
-
-            # 随机选择列索引
-            cols = np.sort(rng.choice(n, row_nnz, replace=False))
-            vals = rng.uniform(-1, 1, row_nnz).astype(np.float32)
-
-            column_indices.extend(cols.tolist())
-            values.extend(vals.tolist())
-
-            # 填充对齐
-            if pad_to > 1:
-                residue = row_nnz % pad_to
-                if residue > 0:
-                    pad_count = pad_to - residue
-                    column_indices.extend([int(cols[-1])] * pad_count)
-                    values.extend([0.0] * pad_count)
-
-            row_offsets.append(len(column_indices))
+        # 提取 CSR 组件
+        row_offsets = csr_sparse.crow_indices().to(torch.int32)
+        col_indices = csr_sparse.col_indices().to(torch.int32).to(device)
+        values = csr_sparse.values().to(torch.float32).to(device)
 
         return cls(
-            torch.tensor(row_offsets, dtype=torch.int32),
-            torch.tensor(column_indices, dtype=torch.int32, device=device),
-            torch.tensor(values, dtype=torch.float32, device=device),
+            row_offsets,
+            col_indices,
+            values,
+            device,
             m,
             n,
             k,
-            device=device,
-        )
-
-    @staticmethod
-    def _pad_csr(
-        row_offsets: torch.Tensor,
-        column_indices: torch.Tensor,
-        values: torch.Tensor,
-        m: int,
-        n: int,
-        pad_to: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        对 CSR 矩阵的每行进行填充对齐
-        """
-        new_row_offsets = [0]
-        new_column_indices = []
-        new_values = []
-
-        for i in range(m):
-            start = int(row_offsets[i])
-            end = int(row_offsets[i + 1])
-            row_nnz = end - start
-
-            # 复制原始数据
-            for j in range(start, end):
-                new_column_indices.append(int(column_indices[j]))
-                new_values.append(float(values[j]))
-
-            # 填充
-            if row_nnz > 0 and pad_to > 1:
-                residue = row_nnz % pad_to
-                if residue > 0:
-                    pad_count = pad_to - residue
-                    last_col = int(column_indices[end - 1])
-                    new_column_indices.extend([last_col] * pad_count)
-                    new_values.extend([0.0] * pad_count)
-
-            new_row_offsets.append(len(new_column_indices))
-
-        return (
-            torch.tensor(new_row_offsets, dtype=torch.int32),
-            torch.tensor(new_column_indices, dtype=torch.int32, device=column_indices.device),
-            torch.tensor(new_values, dtype=torch.float32, device=values.device),
         )
 
     def to_torch_sparse_csr(self) -> torch.Tensor:
@@ -359,7 +177,11 @@ class RoDeCSR:
         values = torch.tensor(new_values, dtype=torch.float32)
 
         return torch.sparse_csr_tensor(
-            crow_indices, col_indices, values, size=(self.m, self.n), device=self.device
+            crow_indices,
+            col_indices,
+            values,
+            size=(self.m, self.n),
+            device=self.device,
         )
 
     def __repr__(self) -> str:
@@ -369,7 +191,7 @@ class RoDeCSR:
         )
 
 
-def rode_sddmm(sparse_matrix: RoDeCSR, lhs_matrix: torch.Tensor, rhs_matrix: torch.Tensor) -> torch.Tensor:
+def rode_sddmm(sparse_matrix: RoDeCSR, lhs: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:
     """
     执行 RoDe SDDMM: out = S ⊙ (A × B^T)
 
@@ -390,38 +212,40 @@ def rode_sddmm(sparse_matrix: RoDeCSR, lhs_matrix: torch.Tensor, rhs_matrix: tor
     # 检查输入
     m, n, k = sparse_matrix.m, sparse_matrix.n, sparse_matrix.k
 
-    if lhs_matrix.shape != (m, k):
-        raise ValueError(f"lhs_matrix shape must be ({m}, {k}), got {lhs_matrix.shape}")
-    if rhs_matrix.shape != (n, k):
-        raise ValueError(f"rhs_matrix shape must be ({n}, {k}), got {rhs_matrix.shape}")
+    if lhs.shape != (m, k):
+        raise ValueError(f"lhs_matrix shape must be ({m}, {k}), got {lhs.shape}")
+    if rhs.shape != (n, k):
+        raise ValueError(f"rhs_matrix shape must be ({n}, {k}), got {rhs.shape}")
+
+    assert lhs.is_cuda and lhs.device == sparse_matrix.device, (
+        f"lhs must be on {sparse_matrix.device}, got {lhs.device}"
+    )
+    assert rhs.is_cuda and rhs.device == sparse_matrix.device, (
+        f"rhs must be on {sparse_matrix.device}, got {rhs.device}"
+    )
+    assert lhs.dtype == torch.float32, f"lhs must be float32, got {lhs.dtype}"
+    assert rhs.dtype == torch.float32, f"rhs must be float32, got {rhs.dtype}"
 
     # 确保数据类型和连续性
-    lhs = lhs_matrix.to(dtype=torch.float32, device=sparse_matrix.device).contiguous()
-    rhs = rhs_matrix.to(dtype=torch.float32, device=sparse_matrix.device).contiguous()
+    lhs = lhs.contiguous()
+    rhs = rhs.contiguous()
 
-    try:
-        # 使用 CUDA 扩展
-        import rode_sddmm_cuda
-
-        out = rode_sddmm_cuda.sddmm_forward(
-            sparse_matrix.block_indices,
-            sparse_matrix.residue_indices,
-            sparse_matrix.st_offsets,
-            sparse_matrix.m1,
-            sparse_matrix.m2,
-            sparse_matrix.row_offsets,
-            sparse_matrix.column_indices,
-            sparse_matrix.values,
-            m,
-            n,
-            lhs,
-            rhs,
-            k,
-        )
-        return out
-
-    except ImportError:
-        raise ImportError("rode_sddmm_cuda extension not found. Please compile with: python setup.py install")
+    out = rode_sddmm_cuda.sddmm_forward(
+        sparse_matrix.block_indices,
+        sparse_matrix.residue_indices,
+        sparse_matrix.st_offsets,
+        sparse_matrix.m1,
+        sparse_matrix.m2,
+        sparse_matrix.row_offsets,
+        sparse_matrix.column_indices,
+        sparse_matrix.values,
+        m,
+        n,
+        lhs,
+        rhs,
+        k,
+    )
+    return out
 
 
 def torch_sddmm_reference(

@@ -162,10 +162,16 @@ def run_single_test(m: int, n: int, nnz_per_row: int, k: int = 128) -> TestResul
     """运行单个测试"""
     from rode_sddmm import RoDeCSR, compare_results, rode_sddmm, torch_sddmm_reference
 
-    config = TestConfig(m, n, nnz_per_row, f"m={m}, n={n}, nnz/row={nnz_per_row}")
+    config = TestConfig(m, n, nnz_per_row=nnz_per_row, desc=f"m={m}, n={n}, nnz/row={nnz_per_row}")
 
     # 创建 RoDe CSR 矩阵
-    rode_csr = RoDeCSR.from_random(m, n, nnz_per_row, k=k, seed=42)
+    rode_csr = RoDeCSR.from_random(
+        m,
+        n,
+        nnz_per_row,
+        torch.device("cuda:0"),
+        k=k,
+    )
 
     # 创建稠密矩阵
     torch.manual_seed(123)
@@ -356,7 +362,13 @@ def run_detailed_test(m: int, n: int, nnz_per_row: int, k: int = 128):
 
     # 创建矩阵
     print("创建 RoDe CSR 矩阵...")
-    rode_csr = RoDeCSR.from_random(m, n, nnz_per_row, k=k, seed=42)
+    rode_csr = RoDeCSR.from_random(
+        m,
+        n,
+        nnz_per_row,
+        torch.device("cuda:0"),
+        k=k,
+    )
     print(f"  {rode_csr}")
     print()
 

@@ -91,6 +91,16 @@ class RoDeCSR:
         self.m1 = m1
         self.m2 = m2
 
+    def __repr__(self) -> str:
+        return (
+            f"RoDeCSR(m={self.m}, n={self.n}, nnz={self.nnz}, k={self.k}, "
+            f"m1={self.m1}, m2={self.m2}, device={self.device})"
+        )
+
+    # ========================================================
+    # 以下RoDeCSR的成员方法应当用于测试场景，不应用于性能场景
+    # ========================================================
+
     @classmethod
     def from_random(
         cls,
@@ -141,7 +151,9 @@ class RoDeCSR:
         """
         转换为 PyTorch sparse_csr tensor（不含填充）
 
-        注意：这会移除填充的零值
+        注意：
+        1. 这会移除填充的零值
+        2. 性能很差，不应用于性能场景
         """
         # 移除填充（值为0的元素）
         mask = self.values != 0
@@ -176,12 +188,6 @@ class RoDeCSR:
             values,
             size=(self.m, self.n),
             device=self.device,
-        )
-
-    def __repr__(self) -> str:
-        return (
-            f"RoDeCSR(m={self.m}, n={self.n}, nnz={self.nnz}, k={self.k}, "
-            f"m1={self.m1}, m2={self.m2}, device={self.device})"
         )
 
 
@@ -240,4 +246,3 @@ def rode_sddmm(sparse_matrix: RoDeCSR, lhs: torch.Tensor, rhs: torch.Tensor) -> 
         k,
     )
     return out
-

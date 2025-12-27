@@ -8,35 +8,7 @@ def torch_sddmm_reference(
     lhs_matrix: torch.Tensor,
     rhs_matrix: torch.Tensor,
 ) -> torch.Tensor:
-    """
-    PyTorch 参考实现的 SDDMM: out = S ⊙ (A × B^T)
-
-    使用 torch.sparse.sampled_addmm API 实现 SDDMM:
-        sampled_addmm(input, mat1, mat2, beta, alpha) = alpha * (mat1 @ mat2) * spy(input) + beta * input
-
-    当 beta=1.0, alpha=1.0 时:
-        out = (mat1 @ mat2) * spy(input) + input
-            = (A × B^T) 采样值 + S 原始值
-
-    但我们需要的是 S ⊙ (A × B^T)，即 S 的值 × 采样值。
-
-    最高效实现：直接传入 sparse_csr，设置 beta=0.0
-        - sampled_addmm 只使用 sparse_csr 的稀疏模式进行采样
-        - 返回 (A × B^T) 在 S 非零位置的采样值
-        - 然后乘以 S 的原始值得到最终 SDDMM 结果
-
-    参考: https://pytorch.org/docs/stable/generated/torch.sparse.sampled_addmm.html
-
-    Args:
-        sparse_csr: PyTorch sparse_csr tensor，形状 (m, n)
-        lhs_matrix: 左侧稠密矩阵 (m, k)
-        rhs_matrix: 右侧稠密矩阵 (n, k)
-
-    Returns:
-        SDDMM 结果的稀疏 CSR tensor
-    """
-    # 最高效实现：直接使用 sparse_csr，避免创建额外的 ones_sparse
-    # beta=0.0 时，sparse_csr 的值不参与加法，只使用其稀疏模式
+    # sparse_csr 的值不参与mm，只使用其稀疏模式(sparsity pattern)
     sampled = torch.sparse.sampled_addmm(
         sparse_csr,
         lhs_matrix,  # (m, k)
@@ -82,7 +54,6 @@ def compare_results(
 
     # RoDe 输出需要移除填充位置
     rode_values = []
-    torch_idx = 0
 
     row_offsets = rode_csr.row_offsets.cpu()
     values_cpu = rode_csr.values.cpu()

@@ -489,23 +489,32 @@ RoDeComputeKernel2(int m,int k,int n,const ScalarValue* __restrict__ values,cons
     SparseKernel<ScalarValue,SparseValue,DenseValue,kBlockItemsY,kBlockItemsK,kBlockItemsX,kBlockWidth,kResidueUnroll,STAGE>::Kernel4Residue(m,k,n,values,column_indices,row_offsets,row_indices,B,C);
 }
 
-template <typename ScalarValue,typename SparseValue,typename DenseValue, int kBlockItemsY,int kBlockItemsK,int kBlockItemsX1,int kBlockItemsX2,int kBlockWidth,int kResidueUnroll,int STAGE = 8> 
+template <typename ScalarValue,typename SparseValue,typename DenseValue, int kBlockItemsY,int kBlockItemsK,int kBlockItemsX1,int kBlockItemsX2,int kBlockWidth,int kResidueUnroll,int STAGE = 8>
 void RoDeSpmmKernel(int m1,int m2,int k,int n,const ScalarValue* __restrict__ values,const int * __restrict__ column_indices,const int * __restrict__ row_offsets,const int *__restrict__ row_indices1,const int *__restrict__ row_indices2,const int* __restrict__ row_seg_st_offsets,const ScalarValue *B,ScalarValue* C,cudaStream_t stream1,cudaStream_t stream2) {
 
-    #ifdef THREADBLOCK_SWIZZLE
-        dim3 grid_dim1((n + kBlockItemsX1 - 1) / kBlockItemsX1,(m1 + kBlockItemsY - 1) / kBlockItemsY,1);
-        dim3 grid_dim2((n + kBlockItemsX2 - 1) / kBlockItemsX2,(m2 + kBlockItemsY - 1) / kBlockItemsY,1);
-    #else
-        dim3 grid_dim1( (m1 + kBlockItemsY - 1) / kBlockItemsY, (n + kBlockItemsX1 - 1)/kBlockItemsX1,1);
-        dim3 grid_dim2( (m2 + kBlockItemsY - 1) / kBlockItemsY, (n + kBlockItemsX2 - 1)/kBlockItemsX2,1);
-    #endif
+    dim3 block_dim( kBlockWidth, kBlockItemsY, 1);
 
-    dim3 block_dim( kBlockWidth, kBlockItemsY, 1); 
+    // 仅当 m1 > 0 且 stream1 存在时启动 Block kernel
+    if (m1 > 0 && stream1 != 0) {
+        #ifdef THREADBLOCK_SWIZZLE
+            dim3 grid_dim1((n + kBlockItemsX1 - 1) / kBlockItemsX1,(m1 + kBlockItemsY - 1) / kBlockItemsY,1);
+        #else
+            dim3 grid_dim1( (m1 + kBlockItemsY - 1) / kBlockItemsY, (n + kBlockItemsX1 - 1)/kBlockItemsX1,1);
+        #endif
+        RoDeComputeKernel1<ScalarValue,SparseValue,DenseValue,kBlockItemsY,kBlockItemsK,kBlockItemsX1,kBlockWidth,kResidueUnroll,STAGE><<<grid_dim1,block_dim,0,stream1>>>(m1,k,n,
+                            values,column_indices,row_offsets,row_indices1,row_seg_st_offsets,B,C);
+    }
 
-    RoDeComputeKernel1<ScalarValue,SparseValue,DenseValue,kBlockItemsY,kBlockItemsK,kBlockItemsX1,kBlockWidth,kResidueUnroll,STAGE><<<grid_dim1,block_dim,0,stream1>>>(m1,k,n,
-                        values,column_indices,row_offsets,row_indices1,row_seg_st_offsets,B,C);
-    RoDeComputeKernel2<ScalarValue,SparseValue,DenseValue,kBlockItemsY,kBlockItemsK,kBlockItemsX2,kBlockWidth,kResidueUnroll,STAGE><<<grid_dim2,block_dim,0,stream2>>>(m2,k,n,
-                        values,column_indices,row_offsets,row_indices2,B,C);
+    // 仅当 m2 > 0 且 stream2 存在时启动 Residue kernel
+    if (m2 > 0 && stream2 != 0) {
+        #ifdef THREADBLOCK_SWIZZLE
+            dim3 grid_dim2((n + kBlockItemsX2 - 1) / kBlockItemsX2,(m2 + kBlockItemsY - 1) / kBlockItemsY,1);
+        #else
+            dim3 grid_dim2( (m2 + kBlockItemsY - 1) / kBlockItemsY, (n + kBlockItemsX2 - 1)/kBlockItemsX2,1);
+        #endif
+        RoDeComputeKernel2<ScalarValue,SparseValue,DenseValue,kBlockItemsY,kBlockItemsK,kBlockItemsX2,kBlockWidth,kResidueUnroll,STAGE><<<grid_dim2,block_dim,0,stream2>>>(m2,k,n,
+                            values,column_indices,row_offsets,row_indices2,B,C);
+    }
 }
 
 void RoDeSpmm_n32(int m1,int m2,int k,int n,const float* __restrict__ values,const int * __restrict__ column_indices,const int * __restrict__ row_offsets,const int *__restrict__ row_indices1,const int *__restrict__ row_indices2,\

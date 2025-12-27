@@ -18,17 +18,11 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import torch
 
-# 尝试导入 tabulate
-try:
-    from tabulate import tabulate
-except ImportError:
-    print("警告: 缺少 tabulate 库，将使用简单格式输出")
-    print("安装: pip install tabulate")
-    tabulate = None
+from tabulate import tabulate
 
 
 # ============================================================================
@@ -319,14 +313,7 @@ def run_tests_with_table(configs: List[TestConfig], title: str = "测试结果",
         table_data.append(row)
 
     # 打印表格
-    if tabulate:
-        print(tabulate(table_data, headers=headers, tablefmt="simple"))
-    else:
-        # 简单格式输出
-        print(" | ".join(headers))
-        print("-" * 100)
-        for row in table_data:
-            print(" | ".join(str(x) for x in row))
+    print(tabulate(table_data, headers=headers, tablefmt="simple"))
 
     print()
     print(
@@ -430,11 +417,7 @@ def run_detailed_test(m: int, n: int, nnz_per_row: int, k: int = 128):
         ["测试结果", format_result(comparison["passed"])],
     ]
 
-    if tabulate:
-        print(tabulate(detail_data, tablefmt="simple"))
-    else:
-        for row in detail_data:
-            print(f"  {row[0]}: {row[1]}")
+    print(tabulate(detail_data, tablefmt="simple"))
 
     print()
     return comparison["passed"]
